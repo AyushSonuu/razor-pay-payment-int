@@ -189,13 +189,18 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
     """
     print(f"BG_TASK {request_id}/{payment_id}: Starting background task.")
     db_bg = SessionLocal()
-    email_sent = False
+    email_sent_flag = False
     try:
-        user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
+        # Re-fetch payment within the session to ensure we have the latest data
         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
         
-        if not user_bg or not payment_bg:
+        if not payment_bg or not payment_bg.user:
             print(f"BG_TASK {request_id}/{payment_id}: User or Payment not found. Aborting.")
+            return
+
+        # ✅ Final idempotency check: Has the email already been sent for this payment?
+        if payment_bg.email_sent:
+            print(f"BG_TASK {request_id}/{payment_id}: Email already sent for this payment. Aborting.")
             return
 
         # Safety check: ensure we don't re-process a completed payment.
@@ -203,23 +208,24 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
             print(f"BG_TASK {request_id}/{payment_id}: Payment is already completed. Aborting.")
             return
 
-        if not user_bg.invite_link:
-            print(f"BG_TASK {request_id}/{payment_id}: FATAL - Invite link not found for user {user_id}.")
+        if not payment_bg.user.invite_link:
+            print(f"BG_TASK {request_id}/{payment_id}: FATAL - Invite link not found for user {payment_bg.user.id}.")
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
             return
         
-        invite_link = user_bg.invite_link
+        invite_link = payment_bg.user.invite_link
         
-        print(f"BG_TASK {request_id}/{payment_id}: Attempting to send email to {email_to}.")
-        await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
-        email_sent = True
+        print(f"BG_TASK {request_id}/{payment_id}: Attempting to send email to {payment_bg.user.email}.")
+        await send_email(to=payment_bg.user.email, invite_link=invite_link, batch=payment_bg.user.batch.name, settings=settings)
+        email_sent_flag = True
         print(f"BG_TASK {request_id}/{payment_id}: Email send successful.")
         
-        crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
+        # ✅ Atomically mark payment as completed AND email as sent.
+        crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed", email_sent=True)
 
     except Exception as e:
         db_bg.rollback()
-        if not email_sent:
+        if not email_sent_flag:
             # If email was not sent, it's safe to mark as failed for a potential retry.
             print(f"BG_TASK {request_id}/{payment_id}: Email was NOT sent. Marking as failed due to error: {e}")
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")

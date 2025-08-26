@@ -43,6 +43,7 @@ class Payment(Base):
     amount = Column(Float)
     currency = Column(String)
     status = Column(String, default="pending", nullable=False)
+    email_sent = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     user = relationship("User", back_populates="payments")

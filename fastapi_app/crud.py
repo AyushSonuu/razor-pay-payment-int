@@ -86,11 +86,17 @@ def create_payment(db: Session, payment: schemas.PaymentCreate, user_id: int):
 def get_payment_by_payment_id(db: Session, payment_id: str):
     return db.query(models.Payment).filter(models.Payment.razorpay_payment_id == payment_id).first()
 
-def update_payment_status(db: Session, payment_id: str, status: str):
-    print(f"CRUD: Attempting to update payment_id={payment_id} to status='{status}'")
+def update_payment_status(db: Session, payment_id: str, status: str, email_sent: bool = None):
+    log_msg = f"CRUD: Attempting to update payment_id={payment_id} to status='{status}'"
+    if email_sent is not None:
+        log_msg += f" and email_sent={email_sent}"
+    print(log_msg)
+    
     db_payment = get_payment_by_payment_id(db, payment_id)
     if db_payment:
         db_payment.status = status
+        if email_sent is not None:
+            db_payment.email_sent = email_sent
         db.commit()
         db.refresh(db_payment)
     return db_payment
