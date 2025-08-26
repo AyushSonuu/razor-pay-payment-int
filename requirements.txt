@@ -1,8 +1,8 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+sqlalchemy== 2.0.43
 python-dotenv
 requests
-razorpay
-aiosmtplib
-pydantic-settings 
+razorpay==1.4.2
+aiosmtplib==4.0.2
+pydantic-settings ==2.10.1
