@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, and_
-from datetime import datetime, timedelta
+from sqlalchemy import func, desc, and_, case
+from datetime import datetime, timedelta, timezone
 from . import models, schemas
 from .admin import schemas as admin_schemas
 from .admin.security import get_password_hash
@@ -153,16 +153,28 @@ def get_dashboard_stats(db: Session):
     total_revenue = db.query(func.sum(models.Payment.amount)).filter(models.Payment.status == "completed").scalar() or 0
     
     # Users per batch
-    users_per_batch = db.query(
+    users_per_batch_query = db.query(
         models.Batch.name,
         func.count(models.User.id).label('user_count')
     ).join(models.User).group_by(models.Batch.id, models.Batch.name).all()
+    users_per_batch = [{"name": b.name, "user_count": b.user_count} for b in users_per_batch_query]
     
     # Recent payments (last 10)
-    recent_payments = db.query(models.Payment).order_by(desc(models.Payment.created_at)).limit(10).all()
+    recent_payments_query = db.query(models.Payment).order_by(desc(models.Payment.created_at)).limit(10).all()
+    recent_payments = [{
+        "amount": p.amount,
+        "razorpay_payment_id": p.razorpay_payment_id,
+        "status": p.status,
+        "user": {"name": p.user.name if p.user else "Unknown"}
+    } for p in recent_payments_query]
     
     # Recent users (last 10)
-    recent_users = db.query(models.User).order_by(desc(models.User.id)).limit(10).all()
+    recent_users_query = db.query(models.User).order_by(desc(models.User.id)).limit(10).all()
+    recent_users = [{
+        "name": u.name,
+        "email": u.email,
+        "batch": {"name": u.batch.name if u.batch else "No batch"}
+    } for u in recent_users_query]
     
     return {
         "total_users": total_users,
@@ -182,56 +194,85 @@ def get_dashboard_stats(db: Session):
 
 def get_payment_analytics(db: Session, days: int = 30):
     """Get payment analytics for the last N days"""
-    end_date = datetime.now()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=days)
     
-    # Daily payment counts
-    daily_payments = db.query(
+    # Daily payment counts and revenue for completed payments
+    daily_payments_query = db.query(
         func.date(models.Payment.created_at).label('date'),
         func.count(models.Payment.id).label('count'),
-        func.sum(models.Payment.amount).label('revenue')
+        func.sum(
+            case(
+                (models.Payment.status == "completed", models.Payment.amount),
+                else_=0
+            )
+        ).label('revenue')
     ).filter(
-        and_(
-            models.Payment.created_at >= start_date,
-            models.Payment.created_at <= end_date
-        )
+        models.Payment.created_at.between(start_date, end_date)
     ).group_by(func.date(models.Payment.created_at)).all()
     
-    # Payment status distribution
-    status_distribution = db.query(
+    # Payment status distribution for the period
+    status_distribution_query = db.query(
         models.Payment.status,
         func.count(models.Payment.id).label('count')
+    ).filter(
+        models.Payment.created_at.between(start_date, end_date)
     ).group_by(models.Payment.status).all()
+    status_distribution = [{"status": s.status, "count": s.count} for s in status_distribution_query]
     
+    # Create a dictionary for quick lookup
+    payments_by_date = {str(p.date): {"count": p.count, "revenue": p.revenue or 0} for p in daily_payments_query}
+    
+    # Generate a full date range to ensure no gaps in the chart
+    result_daily_payments = []
+    for i in range(days + 1):
+        current_date = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        data = payments_by_date.get(current_date, {"count": 0, "revenue": 0})
+        result_daily_payments.append({
+            "date": current_date,
+            "count": data["count"],
+            "revenue": data["revenue"]
+        })
+
     return {
-        "daily_payments": daily_payments,
+        "daily_payments": result_daily_payments,
         "status_distribution": status_distribution
     }
 
 def get_user_analytics(db: Session, days: int = 30):
     """Get user analytics for the last N days"""
-    end_date = datetime.now(datetime.timezone.utc)
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=days)
     
     # Users joined per day
-    daily_users = db.query(
+    daily_users_query = db.query(
         func.date(models.User.created_at).label('date'),
         func.count(models.User.id).label('count')
     ).filter(
-        and_(
-            models.User.created_at >= start_date,
-            models.User.created_at <= end_date
-        )
+        models.User.created_at.between(start_date, end_date)
     ).group_by(func.date(models.User.created_at)).order_by(func.date(models.User.created_at)).all()
     
-    # Users per batch
-    batch_distribution = db.query(
+    # Users per batch for new users in the period
+    batch_distribution_query = db.query(
         models.Batch.name,
         func.count(models.User.id).label('count')
-    ).join(models.User).group_by(models.Batch.id, models.Batch.name).all()
+    ).join(models.User).filter(
+        models.User.created_at.between(start_date, end_date)
+    ).group_by(models.Batch.id, models.Batch.name).all()
+    batch_distribution = [{"name": b.name, "count": b.count} for b in batch_distribution_query]
     
+    # Create a dictionary for quick lookup
+    users_by_date = {str(u.date): u.count for u in daily_users_query}
+
+    # Generate a full date range to ensure no gaps in the chart
+    result_daily_users = []
+    for i in range(days + 1):
+        current_date = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        count = users_by_date.get(current_date, 0)
+        result_daily_users.append({"date": current_date, "count": count})
+
     return {
-        "daily_users": daily_users,
+        "daily_users": result_daily_users,
         "batch_distribution": batch_distribution
     }
 
