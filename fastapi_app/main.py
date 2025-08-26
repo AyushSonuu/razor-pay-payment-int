@@ -188,6 +188,17 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
     acquired by the webhook.
     """
     print(f"BG_TASK {request_id}/{payment_id}: Starting background task.")
+    
+    # ✅ IMMEDIATE check: Is this payment already processed?
+    db_immediate = SessionLocal()
+    try:
+        immediate_payment = crud.get_payment_by_payment_id(db_immediate, payment_id)
+        if immediate_payment and immediate_payment.email_sent:
+            print(f"BG_TASK {request_id}/{payment_id}: IMMEDIATE ABORT - Email already sent for this payment!")
+            return
+    finally:
+        db_immediate.close()
+    
     db_bg = SessionLocal()
     email_sent_flag = False
     try:
@@ -197,6 +208,8 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
         if not payment_bg or not payment_bg.user:
             print(f"BG_TASK {request_id}/{payment_id}: User or Payment not found. Aborting.")
             return
+
+        print(f"BG_TASK {request_id}/{payment_id}: Payment status='{payment_bg.status}', email_sent={payment_bg.email_sent}")
 
         # ✅ Final idempotency check: Has the email already been sent for this payment?
         if payment_bg.email_sent:
@@ -214,6 +227,13 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
             return
         
         invite_link = payment_bg.user.invite_link
+        print(f"BG_TASK {request_id}/{payment_id}: Using invite link: {invite_link[:50]}...")
+        
+        # ✅ CRITICAL: Double-check email_sent flag right before sending
+        db_bg.refresh(payment_bg)
+        if payment_bg.email_sent:
+            print(f"BG_TASK {request_id}/{payment_id}: Email already sent (double-check). Aborting.")
+            return
         
         print(f"BG_TASK {request_id}/{payment_id}: Attempting to send email to {payment_bg.user.email}.")
         await send_email(to=payment_bg.user.email, invite_link=invite_link, batch=payment_bg.user.batch.name, settings=settings)
@@ -222,6 +242,7 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
         
         # ✅ Atomically mark payment as completed AND email as sent.
         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed", email_sent=True)
+        print(f"BG_TASK {request_id}/{payment_id}: Payment marked as completed and email_sent=True")
 
     except Exception as e:
         db_bg.rollback()
