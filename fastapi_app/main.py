@@ -243,6 +243,29 @@ async def get_invite_link(req: Request, db: Session = Depends(get_db)):
         "error": "Invite link not found. Please check your email for the invite link."
     }, status_code=404)
 
+@app.get("/retrieve-invite-link/{payment_id}")
+async def retrieve_invite_link(payment_id: str, db: Session = Depends(get_db)):
+    """
+    Simple endpoint to retrieve existing invite link from database.
+    No polling, no processing - just fetch what's already there.
+    """
+    payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
+    
+    if payment and payment.invite_link:
+        return JSONResponse({
+            "success": True,
+            "inviteLink": payment.invite_link,
+            "batchType": payment.user.batch.name,
+            "status": payment.status,
+            "message": "Invite link retrieved successfully"
+        })
+    else:
+        return JSONResponse({
+            "success": False,
+            "error": "Invite link not available yet. Please check your email.",
+            "status": payment.status if payment else "not_found"
+        }, status_code=404)
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}

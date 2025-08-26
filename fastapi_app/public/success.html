@@ -267,16 +267,12 @@
       errorDiv.style.display = 'none';
       
       try {
-        // Try to get invite link from backend
-        const response = await fetch('/get-invite-link', {
-          method: 'POST',
+        // Use the new simple endpoint to get invite link from database
+        const response = await fetch(`/retrieve-invite-link/${paymentId}`, {
+          method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            batchType: batch,
-            paymentId: paymentId
-          })
+          }
         });
         
         if (response.ok) {
@@ -308,7 +304,7 @@
     }
     
     // Load invite link when page loads
-    if (batch) {
+    if (batch && paymentId) {
       loadInviteLink();
     }
   </script>
