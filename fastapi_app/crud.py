@@ -296,4 +296,12 @@ def update_setting(db: Session, key: str, value: str):
 
 def get_settings_as_dict(db: Session):
     settings = get_all_settings(db)
-    return {setting.key: setting.value for setting in settings} 
+    return {setting.key: setting.value for setting in settings}
+
+# Processing Lock CRUD
+def remove_processing_lock(db: Session, payment_id: str):
+    """Finds and removes a processing lock from the database."""
+    lock_to_delete = db.query(models.ProcessingLock).filter(models.ProcessingLock.payment_id == payment_id).first()
+    if lock_to_delete:
+        db.delete(lock_to_delete)
+        db.commit() 

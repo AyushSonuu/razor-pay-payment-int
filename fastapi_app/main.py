@@ -180,147 +180,55 @@ async def create_order(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str, settings: dict):
-#     db_bg = SessionLocal()
-    
-#     # Attempt to acquire a lock for this payment_id
-#     lock = models.ProcessingLock(payment_id=payment_id)
-#     db_bg.add(lock)
-#     try:
-#         db_bg.commit()
-#     except IntegrityError:
-#         # This means another process has already acquired the lock.
-#         db_bg.rollback()
-#         print(f"Payment {payment_id} is already being processed. Aborting.")
-#         db_bg.close()
-#         return
-#     except Exception as e:
-#         db_bg.rollback()
-#         print(f"Error acquiring lock for payment {payment_id}: {e}")
-#         db_bg.close()
-#         return
-
-#     email_sent = False
-#     try:
-#         user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
-#         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
-        
-#         if not user_bg or not payment_bg:
-#             # If user or payment doesn't exist, something is wrong.
-#             # The webhook should have created the payment.
-#             # We can't update status if payment doesn't exist, so we just log and exit.
-#             print(f"User or Payment not found for payment_id {payment_id}. Aborting processing.")
-#             return
-
-#         # Double-check if processing is still needed
-#         if payment_bg.status == "completed":
-#             print(f"Payment {payment_id} is already completed. Aborting.")
-#             return
-
-#         # The invite link is now pre-generated and stored on the user.
-#         if not user_bg.invite_link:
-#             print(f"FATAL: Invite link not found for user {user_id} during payment processing.")
-#             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
-#             return
-        
-#         invite_link = user_bg.invite_link
-        
-#         # Attempt to send email
-#         await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
-#         email_sent = True
-        
-#         # If successful, mark as completed
-#         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
-
-#     except Exception as e:
-#         db_bg.rollback()
-#         if not email_sent:
-#             # If email was not sent, it's safe to mark as failed for retry.
-#             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
-#         else:
-#             # Email was sent, but DB update failed. Log critically.
-#             # The status will remain 'processing'. This prevents re-sending the email.
-#             print(f"CRITICAL: Email sent for payment {payment_id}, but DB update failed: {e}")
-#         print(f"Error processing payment {payment_id}: {e}")
-#     finally:
-#         try:
-#             # Attempt to remove the lock.
-#             lock_to_delete = db_bg.query(models.ProcessingLock).filter(models.ProcessingLock.payment_id == payment_id).first()
-#             if lock_to_delete:
-#                 db_bg.delete(lock_to_delete)
-#                 db_bg.commit()
-#         except Exception as lock_e:
-#             print(f"Error removing lock for payment {payment_id}: {lock_e}")
-#             db_bg.rollback()
-        
-#         db_bg.close()
-
-
 async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str, settings: dict):
+    """
+    This background task handles the core logic of sending the email after a
+    successful payment. It is responsible for releasing the processing lock
+    acquired by the webhook.
+    """
     db_bg = SessionLocal()
-
     email_sent = False
-    try:
-        # ✅ Acquire lock at DB level
-        lock = models.ProcessingLock(payment_id=payment_id)
-        db_bg.add(lock)
-        db_bg.commit()
-    except IntegrityError:
-        db_bg.rollback()
-        print(f"Payment {payment_id} already locked. Skipping email.")
-        db_bg.close()
-        return
-
     try:
         user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
-
+        
         if not user_bg or not payment_bg:
-            print(f"User or Payment not found for {payment_id}")
+            print(f"User or Payment not found for payment_id {payment_id}. Aborting processing.")
             return
 
-        # ✅ Do not send again if already done
-        if payment_bg.status == "completed" and getattr(payment_bg, "email_sent", False):
-            print(f"Payment {payment_id} already completed + email sent. Skipping.")
+        # Safety check: ensure we don't re-process a completed payment.
+        if payment_bg.status == "completed":
+            print(f"Payment {payment_id} is already completed. Aborting background task.")
             return
 
         if not user_bg.invite_link:
-            print(f"No invite link for user {user_id}")
+            print(f"FATAL: Invite link not found for user {user_id} during payment processing.")
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
-            db_bg.commit()
             return
-
+        
         invite_link = user_bg.invite_link
-
-        # Send email once
+        
+        # Attempt to send email
         await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
         email_sent = True
-
-        # ✅ Mark as completed + email_sent
-        crud.update_payment_status(db_bg, payment_id=payment_id, status="completed")
-        if hasattr(payment_bg, "email_sent"):
-            payment_bg.email_sent = True
-        db_bg.commit()
-
-        print(f"✅ Email sent for {payment_id}")
+        
+        crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
 
     except Exception as e:
         db_bg.rollback()
         if not email_sent:
+            # If email was not sent, it's safe to mark as failed for a potential retry.
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
-            db_bg.commit()
-        print(f"Error processing {payment_id}: {e}")
+        else:
+            # Email was sent, but a subsequent DB update failed. Log critically.
+            # The status will remain 'processing', preventing re-sends on webhook retries.
+            print(f"CRITICAL: Email sent for payment {payment_id}, but DB update failed: {e}")
+        print(f"Error processing payment {payment_id}: {e}")
     finally:
-        try:
-            lock_to_delete = db_bg.query(models.ProcessingLock).filter_by(payment_id=payment_id).first()
-            if lock_to_delete:
-                db_bg.delete(lock_to_delete)
-                db_bg.commit()
-        except Exception as lock_e:
-            print(f"Error removing lock for {payment_id}: {lock_e}")
-            db_bg.rollback()
+        # ✅ Always remove the lock when the task is done, whether it succeeded or failed.
+        # This makes the payment process re-entrant if it fails and needs to be retried.
+        crud.remove_processing_lock(db_bg, payment_id)
         db_bg.close()
-
 
 
 @app.post("/webhook")
@@ -342,19 +250,30 @@ async def webhook(
     event = body.get("event")
 
     if event == "payment.captured":
+        payment_entity = body["payload"]["payment"]["entity"]
+        payment_id = payment_entity["id"]
+        
+        # ✅ Acquire lock at DB level to prevent race conditions from concurrent webhooks
+        lock = models.ProcessingLock(payment_id=payment_id)
+        db.add(lock)
         try:
-            payment_entity = body["payload"]["payment"]["entity"]
-            payment_id = payment_entity["id"]
-            
-            # --- Robust Idempotency Check ---
-            db.expire_all() # Ensure we have the latest from the DB
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            # Lock already exists, meaning another thread is processing this payment.
+            # Acknowledge gracefully to prevent webhook retries.
+            print(f"Payment {payment_id} is already being processed (lock exists). Aborting webhook.")
+            return JSONResponse({"status": "ok", "message": "Already processing."})
+
+        try:
+            # --- Idempotency Check (after acquiring lock) ---
             existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
+            if existing_payment and existing_payment.status == "completed":
+                crud.remove_processing_lock(db, payment_id)
+                print(f"Payment {payment_id} already completed. Aborting webhook.")
+                return JSONResponse({"status": "ok", "message": "Payment already completed."})
 
-            # If already completed or currently processing, do nothing.
-            if existing_payment and existing_payment.status in ["processing", "completed"]:
-                return JSONResponse({"status": "ok", "message": f"Payment {payment_id} is already {existing_payment.status}."})
-
-            # --- Mark as Processing and Start Task ---
+            # --- Get data and prepare for background task ---
             order_id = payment_entity["order_id"]
             email = payment_entity["email"]
             amount = payment_entity["amount"] / 100
@@ -363,32 +282,36 @@ async def webhook(
             batch_type = order["notes"]["batch_type"]
 
             user = crud.get_user_by_email(db, email=email)
-            if user:
-                # If payment doesn't exist, create it.
-                if not existing_payment:
-                    payment_data = schemas.PaymentCreate(
-                        razorpay_payment_id=payment_id,
-                        razorpay_order_id=order_id,
-                        amount=amount,
-                        currency=currency,
-                        status="processing" # Set to processing
-                    )
-                    crud.create_payment(db, payment_data, user_id=user.id)
-                else: # If it exists but failed/was pending, mark it as processing now
-                    crud.update_payment_status(db, payment_id=payment_id, status="processing")
-                
-                # Launch background task
-                background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
-        except IntegrityError:
-            db.rollback()
-            # This likely means a concurrent webhook for the same payment is being processed.
-            # Acknowledge gracefully to prevent retries from Razorpay.
-            print(f"Webhook for payment resulted in IntegrityError. Likely a race condition.")
-            return JSONResponse({"status": "ok", "message": "Acknowledged concurrent request."})
+            if not user:
+                # This should not happen if /create-order worked.
+                crud.remove_processing_lock(db, payment_id)
+                print(f"CRITICAL: User not found for email {email} during webhook for payment {payment_id}.")
+                return JSONResponse({"status": "ok", "message": "User not found."}) # Acknowledge to prevent retries.
+
+            # --- Create/Update payment record to 'processing' ---
+            if not existing_payment:
+                payment_data = schemas.PaymentCreate(
+                    razorpay_payment_id=payment_id,
+                    razorpay_order_id=order_id,
+                    amount=amount,
+                    currency=currency,
+                    status="processing"
+                )
+                crud.create_payment(db, payment_data, user_id=user.id)
+            else:
+                crud.update_payment_status(db, payment_id=payment_id, status="processing")
+            
+            # --- Launch background task ---
+            # The task is now responsible for removing the lock upon completion/failure.
+            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
+
         except Exception as e:
-            # Log other potential errors and return a 500 to signal a problem.
-            print(f"Unhandled error in webhook: {e}")
-            raise HTTPException(status_code=500, detail="Internal Server Error")
+            # If anything fails after acquiring the lock, we must release it to allow retries.
+            print(f"Unhandled error in webhook after lock acquisition: {e}")
+            db.rollback()
+            crud.remove_processing_lock(db, payment_id)
+            # Signal a server error to Razorpay so it can retry the webhook.
+            raise HTTPException(status_code=500, detail="Internal Server Error in webhook.")
 
     return JSONResponse({"status": "ok"})
 
