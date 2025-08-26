@@ -6,3 +6,4 @@ requests
 razorpay==1.4.2
 aiosmtplib==4.0.2
 pydantic-settings ==2.10.1
+setuptools>=65.0.0
