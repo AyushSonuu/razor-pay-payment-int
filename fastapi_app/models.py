@@ -41,7 +41,13 @@ class Payment(Base):
     amount = Column(Float)
     currency = Column(String)
     status = Column(String, default="pending", nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     invite_link = Column(String, nullable=True)
 
-    user = relationship("User", back_populates="payments") 
+    user = relationship("User", back_populates="payments")
+
+class ProcessingLock(Base):
+    __tablename__ = "processing_locks"
+
+    payment_id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)) 

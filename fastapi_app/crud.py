@@ -1,4 +1,6 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func, desc, and_
+from datetime import datetime, timedelta
 from . import models, schemas
 from .admin import schemas as admin_schemas
 from .admin.security import get_password_hash
@@ -14,6 +16,28 @@ def create_batch(db: Session, batch: schemas.BatchCreate):
     db.refresh(db_batch)
     return db_batch
 
+def get_all_batches(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Batch).offset(skip).limit(limit).all()
+
+def get_batch_by_id(db: Session, batch_id: int):
+    return db.query(models.Batch).filter(models.Batch.id == batch_id).first()
+
+def update_batch(db: Session, batch_id: int, batch_data: dict):
+    db_batch = get_batch_by_id(db, batch_id)
+    if db_batch:
+        for key, value in batch_data.items():
+            setattr(db_batch, key, value)
+        db.commit()
+        db.refresh(db_batch)
+    return db_batch
+
+def delete_batch(db: Session, batch_id: int):
+    db_batch = get_batch_by_id(db, batch_id)
+    if db_batch:
+        db.delete(db_batch)
+        db.commit()
+    return db_batch
+
 # User CRUD
 def get_user_by_email(db: Session, email: str):
     return db.query(models.User).filter(models.User.email == email).first()
@@ -24,6 +48,31 @@ def create_user(db: Session, user: schemas.UserCreate, batch_id: int):
     db.commit()
     db.refresh(db_user)
     return db_user
+
+def get_all_users(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.User).offset(skip).limit(limit).all()
+
+def get_user_by_id(db: Session, user_id: int):
+    return db.query(models.User).filter(models.User.id == user_id).first()
+
+def update_user(db: Session, user_id: int, user_data: dict):
+    db_user = get_user_by_id(db, user_id)
+    if db_user:
+        for key, value in user_data.items():
+            setattr(db_user, key, value)
+        db.commit()
+        db.refresh(db_user)
+    return db_user
+
+def delete_user(db: Session, user_id: int):
+    db_user = get_user_by_id(db, user_id)
+    if db_user:
+        db.delete(db_user)
+        db.commit()
+    return db_user
+
+def get_users_by_batch(db: Session, batch_id: int):
+    return db.query(models.User).filter(models.User.batch_id == batch_id).all()
 
 # Payment CRUD
 def create_payment(db: Session, payment: schemas.PaymentCreate, user_id: int):
@@ -52,6 +101,23 @@ def update_payment_status(db: Session, payment_id: str, status: str):
         db.refresh(db_payment)
     return db_payment
 
+def get_all_payments(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Payment).offset(skip).limit(limit).all()
+
+def get_payment_by_id(db: Session, payment_id: int):
+    return db.query(models.Payment).filter(models.Payment.id == payment_id).first()
+
+def get_payments_by_status(db: Session, status: str):
+    return db.query(models.Payment).filter(models.Payment.status == status).all()
+
+def get_payments_by_date_range(db: Session, start_date: datetime, end_date: datetime):
+    return db.query(models.Payment).filter(
+        and_(
+            models.Payment.created_at >= start_date,
+            models.Payment.created_at <= end_date
+        )
+    ).all()
+
 # Admin CRUD
 def get_admin_by_email(db: Session, email: str):
     return db.query(models.Admin).filter(models.Admin.email == email).first()
@@ -62,4 +128,109 @@ def create_admin(db: Session, admin: admin_schemas.AdminCreate):
     db.add(db_admin)
     db.commit()
     db.refresh(db_admin)
-    return db_admin 
+    return db_admin
+
+def get_all_admins(db: Session):
+    return db.query(models.Admin).all()
+
+def get_admin_by_id(db: Session, admin_id: int):
+    return db.query(models.Admin).filter(models.Admin.id == admin_id).first()
+
+# Analytics CRUD
+def get_dashboard_stats(db: Session):
+    """Get comprehensive dashboard statistics"""
+    total_users = db.query(func.count(models.User.id)).scalar()
+    total_payments = db.query(func.count(models.Payment.id)).scalar()
+    total_batches = db.query(func.count(models.Batch.id)).scalar()
+    
+    # Payment status counts
+    completed_payments = db.query(func.count(models.Payment.id)).filter(models.Payment.status == "completed").scalar()
+    pending_payments = db.query(func.count(models.Payment.id)).filter(models.Payment.status == "pending").scalar()
+    failed_payments = db.query(func.count(models.Payment.id)).filter(models.Payment.status == "failed").scalar()
+    processing_payments = db.query(func.count(models.Payment.id)).filter(models.Payment.status == "processing").scalar()
+    
+    # Total revenue
+    total_revenue = db.query(func.sum(models.Payment.amount)).filter(models.Payment.status == "completed").scalar() or 0
+    
+    # Users per batch
+    users_per_batch = db.query(
+        models.Batch.name,
+        func.count(models.User.id).label('user_count')
+    ).join(models.User).group_by(models.Batch.id, models.Batch.name).all()
+    
+    # Recent payments (last 10)
+    recent_payments = db.query(models.Payment).order_by(desc(models.Payment.created_at)).limit(10).all()
+    
+    # Recent users (last 10)
+    recent_users = db.query(models.User).order_by(desc(models.User.id)).limit(10).all()
+    
+    return {
+        "total_users": total_users,
+        "total_payments": total_payments,
+        "total_batches": total_batches,
+        "total_revenue": total_revenue,
+        "payment_status": {
+            "completed": completed_payments,
+            "pending": pending_payments,
+            "failed": failed_payments,
+            "processing": processing_payments
+        },
+        "users_per_batch": users_per_batch,
+        "recent_payments": recent_payments,
+        "recent_users": recent_users
+    }
+
+def get_payment_analytics(db: Session, days: int = 30):
+    """Get payment analytics for the last N days"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    
+    # Daily payment counts
+    daily_payments = db.query(
+        func.date(models.Payment.created_at).label('date'),
+        func.count(models.Payment.id).label('count'),
+        func.sum(models.Payment.amount).label('revenue')
+    ).filter(
+        and_(
+            models.Payment.created_at >= start_date,
+            models.Payment.created_at <= end_date
+        )
+    ).group_by(func.date(models.Payment.created_at)).all()
+    
+    # Payment status distribution
+    status_distribution = db.query(
+        models.Payment.status,
+        func.count(models.Payment.id).label('count')
+    ).group_by(models.Payment.status).all()
+    
+    return {
+        "daily_payments": daily_payments,
+        "status_distribution": status_distribution
+    }
+
+def get_user_analytics(db: Session, days: int = 30):
+    """Get user analytics for the last N days"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    
+    # Users joined per day
+    daily_users = db.query(
+        func.date(models.User.id).label('date'),
+        func.count(models.User.id).label('count')
+    ).filter(
+        and_(
+            models.User.id >= start_date,
+            models.User.id <= end_date
+        )
+    ).group_by(func.date(models.User.id)).all()
+    
+    # Users per batch
+    batch_distribution = db.query(
+        models.Batch.name,
+        func.count(models.User.id).label('count')
+    ).join(models.User).group_by(models.Batch.id, models.Batch.name).all()
+    
+    return {
+        "daily_users": daily_users,
+        "batch_distribution": batch_distribution
+    } 

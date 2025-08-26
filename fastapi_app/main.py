@@ -1,5 +1,6 @@
 import os
 import razorpay
+import datetime 
 import requests
 import aiosmtplib
 import hmac
@@ -8,6 +9,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -135,18 +137,45 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
 
 async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str):
     db_bg = SessionLocal()
+    
+    # Attempt to acquire a lock for this payment_id
+    lock = models.ProcessingLock(payment_id=payment_id)
+    db_bg.add(lock)
+    try:
+        db_bg.commit()
+    except IntegrityError:
+        # This means another process has already acquired the lock.
+        db_bg.rollback()
+        print(f"Payment {payment_id} is already being processed. Aborting.")
+        db_bg.close()
+        return
+    except Exception as e:
+        db_bg.rollback()
+        print(f"Error acquiring lock for payment {payment_id}: {e}")
+        db_bg.close()
+        return
+
     try:
         user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
         
         if not user_bg or not payment_bg:
-            crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
+            # If user or payment doesn't exist, something is wrong.
+            # The webhook should have created the payment.
+            # We can't update status if payment doesn't exist, so we just log and exit.
+            print(f"User or Payment not found for payment_id {payment_id}. Aborting processing.")
             return
 
-        # Only generate link if it doesn't exist
+        # Double-check if processing is still needed
+        if payment_bg.status == "completed":
+            print(f"Payment {payment_id} is already completed. Aborting.")
+            return
+
+        # Generate link if it doesn't exist
         if not payment_bg.invite_link:
             chat_id = user_bg.batch.telegram_chat_id
             invite_link = await generate_telegram_invite(chat_id)
+            # The crud function commits, so the link is saved immediately.
             crud.update_payment_invite_link(db_bg, payment_id=payment_bg.razorpay_payment_id, invite_link=invite_link)
         else:
             invite_link = payment_bg.invite_link
@@ -292,4 +321,3 @@ def get_status():
         }
     }
 
-import datetime 
