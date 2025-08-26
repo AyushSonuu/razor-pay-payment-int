@@ -200,6 +200,7 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         db_bg.close()
         return
 
+    email_sent = False
     try:
         user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
@@ -226,12 +227,24 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         
         # Attempt to send email
         await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
+        email_sent = True
         
         # If successful, mark as completed
         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
 
+    except Exception as e:
+        db_bg.rollback()
+        if not email_sent:
+            # If email was not sent, it's safe to mark as failed for retry.
+            crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
+        else:
+            # Email was sent, but DB update failed. Log critically.
+            # The status will remain 'processing'. This prevents re-sending the email.
+            print(f"CRITICAL: Email sent for payment {payment_id}, but DB update failed: {e}")
+        print(f"Error processing payment {payment_id}: {e}")
+    finally:
         try:
-            # Attempt to remove the lock. If it fails, it's not critical.
+            # Attempt to remove the lock.
             lock_to_delete = db_bg.query(models.ProcessingLock).filter(models.ProcessingLock.payment_id == payment_id).first()
             if lock_to_delete:
                 db_bg.delete(lock_to_delete)
@@ -239,12 +252,7 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         except Exception as lock_e:
             print(f"Error removing lock for payment {payment_id}: {lock_e}")
             db_bg.rollback()
-
-    except Exception as e:
-        # On failure, mark as failed to allow for potential retries
-        crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
-        print(f"Error processing payment {payment_id}: {e}")
-    finally:
+        
         db_bg.close()
 
 @app.post("/webhook")
@@ -266,42 +274,53 @@ async def webhook(
     event = body.get("event")
 
     if event == "payment.captured":
-        payment_entity = body["payload"]["payment"]["entity"]
-        payment_id = payment_entity["id"]
-        
-        # --- Robust Idempotency Check ---
-        db.expire_all() # Ensure we have the latest from the DB
-        existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
-
-        # If already completed or currently processing, do nothing.
-        if existing_payment and existing_payment.status in ["processing", "completed"]:
-            return JSONResponse({"status": "ok", "message": f"Payment {payment_id} is already {existing_payment.status}."})
-
-        # --- Mark as Processing and Start Task ---
-        order_id = payment_entity["order_id"]
-        email = payment_entity["email"]
-        amount = payment_entity["amount"] / 100
-        currency = payment_entity["currency"]
-        order = razorpay_client.order.fetch(order_id)
-        batch_type = order["notes"]["batch_type"]
-
-        user = crud.get_user_by_email(db, email=email)
-        if user:
-            # If payment doesn't exist, create it.
-            if not existing_payment:
-                payment_data = schemas.PaymentCreate(
-                    razorpay_payment_id=payment_id,
-                    razorpay_order_id=order_id,
-                    amount=amount,
-                    currency=currency,
-                    status="processing" # Set to processing
-                )
-                crud.create_payment(db, payment_data, user_id=user.id)
-            else: # If it exists but failed/was pending, mark it as processing now
-                crud.update_payment_status(db, payment_id=payment_id, status="processing")
+        try:
+            payment_entity = body["payload"]["payment"]["entity"]
+            payment_id = payment_entity["id"]
             
-            # Launch background task
-            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
+            # --- Robust Idempotency Check ---
+            db.expire_all() # Ensure we have the latest from the DB
+            existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
+
+            # If already completed or currently processing, do nothing.
+            if existing_payment and existing_payment.status in ["processing", "completed"]:
+                return JSONResponse({"status": "ok", "message": f"Payment {payment_id} is already {existing_payment.status}."})
+
+            # --- Mark as Processing and Start Task ---
+            order_id = payment_entity["order_id"]
+            email = payment_entity["email"]
+            amount = payment_entity["amount"] / 100
+            currency = payment_entity["currency"]
+            order = razorpay_client.order.fetch(order_id)
+            batch_type = order["notes"]["batch_type"]
+
+            user = crud.get_user_by_email(db, email=email)
+            if user:
+                # If payment doesn't exist, create it.
+                if not existing_payment:
+                    payment_data = schemas.PaymentCreate(
+                        razorpay_payment_id=payment_id,
+                        razorpay_order_id=order_id,
+                        amount=amount,
+                        currency=currency,
+                        status="processing" # Set to processing
+                    )
+                    crud.create_payment(db, payment_data, user_id=user.id)
+                else: # If it exists but failed/was pending, mark it as processing now
+                    crud.update_payment_status(db, payment_id=payment_id, status="processing")
+                
+                # Launch background task
+                background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
+        except IntegrityError:
+            db.rollback()
+            # This likely means a concurrent webhook for the same payment is being processed.
+            # Acknowledge gracefully to prevent retries from Razorpay.
+            print(f"Webhook for payment resulted in IntegrityError. Likely a race condition.")
+            return JSONResponse({"status": "ok", "message": "Acknowledged concurrent request."})
+        except Exception as e:
+            # Log other potential errors and return a 500 to signal a problem.
+            print(f"Unhandled error in webhook: {e}")
+            raise HTTPException(status_code=500, detail="Internal Server Error")
 
     return JSONResponse({"status": "ok"})
 
