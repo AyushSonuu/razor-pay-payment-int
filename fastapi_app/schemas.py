@@ -9,6 +9,7 @@ class PaymentBase(BaseModel):
     currency: str
     status: str
     invite_link: Optional[str] = None
+    email_sent: bool = False
 
 class PaymentCreate(PaymentBase):
     pass

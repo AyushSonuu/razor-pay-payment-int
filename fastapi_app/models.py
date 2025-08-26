@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -35,5 +35,6 @@ class Payment(Base):
     status = Column(String)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     invite_link = Column(String, nullable=True)
+    email_sent = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User", back_populates="payments") 

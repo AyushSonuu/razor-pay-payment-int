@@ -145,6 +145,12 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
         payment_entity = body["payload"]["payment"]["entity"]
         order_id = payment_entity["order_id"]
         payment_id = payment_entity["id"]
+        
+        # Idempotency Check: See if this payment has already been successfully processed.
+        existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
+        if existing_payment and existing_payment.email_sent:
+            return JSONResponse({"status": "ok", "message": "Email already sent for this payment."})
+
         email = payment_entity["email"]
         amount = payment_entity["amount"] / 100
         currency = payment_entity["currency"]
@@ -154,24 +160,49 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
 
         user = crud.get_user_by_email(db, email=email)
         if user:
-            # Create payment record
-            payment_data = schemas.PaymentCreate(
-                razorpay_payment_id=payment_id,
-                razorpay_order_id=order_id,
-                amount=amount,
-                currency=currency,
-                status="captured"
-            )
-            payment = crud.create_payment(db, payment_data, user_id=user.id)
-
-            # Generate invite link and send email in the background
-            async def process_payment_and_send_email():
-                chat_id = user.batch.telegram_chat_id
-                invite_link = await generate_telegram_invite(chat_id)
-                crud.update_payment_invite_link(db, payment_id=payment.razorpay_payment_id, invite_link=invite_link)
-                await send_email(to=email, invite_link=invite_link, batch=batch_type)
+            # If payment doesn't exist, create it. Otherwise, use the existing one.
+            if not existing_payment:
+                payment_data = schemas.PaymentCreate(
+                    razorpay_payment_id=payment_id,
+                    razorpay_order_id=order_id,
+                    amount=amount,
+                    currency=currency,
+                    status="captured",
+                    invite_link=None # Explicitly set to None on creation
+                )
+                payment = crud.create_payment(db, payment_data, user_id=user.id)
             
-            background_tasks.add_task(process_payment_and_send_email)
+            user_id = user.id
+            # Generate invite link and send email in the background
+            async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str):
+                db_bg = SessionLocal()
+                try:
+                    user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
+                    payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
+                    
+                    if not user_bg or not payment_bg:
+                        return
+
+                    # Only generate link if it doesn't exist
+                    if not payment_bg.invite_link:
+                        chat_id = user_bg.batch.telegram_chat_id
+                        invite_link = await generate_telegram_invite(chat_id)
+                        crud.update_payment_invite_link(db_bg, payment_id=payment_bg.razorpay_payment_id, invite_link=invite_link)
+                    else:
+                        invite_link = payment_bg.invite_link
+                    
+                    # Attempt to send email
+                    await send_email(to=email_to, invite_link=invite_link, batch=batch_type)
+                    
+                    # If email is sent successfully, mark it in the DB
+                    crud.mark_email_as_sent(db_bg, payment_id=payment_bg.razorpay_payment_id)
+                except Exception as e:
+                    # You might want to log the error here
+                    print(f"Error processing payment {payment_id}: {e}")
+                finally:
+                    db_bg.close()
+            
+            background_tasks.add_task(process_payment_and_send_email, user_id, payment_id, batch_type, email)
 
     return JSONResponse({"status": "ok"})
 

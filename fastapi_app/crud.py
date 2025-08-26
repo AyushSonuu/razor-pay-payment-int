@@ -40,4 +40,12 @@ def update_payment_invite_link(db: Session, payment_id: str, invite_link: str):
         db_payment.invite_link = invite_link
         db.commit()
         db.refresh(db_payment)
+    return db_payment
+
+def mark_email_as_sent(db: Session, payment_id: str):
+    db_payment = get_payment_by_payment_id(db, payment_id)
+    if db_payment:
+        db_payment.email_sent = True
+        db.commit()
+        db.refresh(db_payment)
     return db_payment 
