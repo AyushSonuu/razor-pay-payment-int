@@ -96,7 +96,7 @@ async def send_email(to: str, invite_link: str, batch: str, settings: dict):
         <p>Hi,</p>
         <p>Thanks for joining the <b>{batch}</b> batch! Here's your one-time invite link:</p>
         <p><a href="{invite_link}" target="_blank" rel="noreferrer">{invite_link}</a></p>
-        <p><small>This link is valid for 24 hours and can be used once.</small></p>
+        <p><small>This link is valid bvjdsgfvbejhr dfjs gfjh gfkesjrd gfjerf for 24 hours and can be used once.</small></p>
     """
     message.attach(MIMEText(html, "html"))
 
