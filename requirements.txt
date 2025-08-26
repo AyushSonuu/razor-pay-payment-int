@@ -1,9 +1,14 @@
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
-sqlalchemy== 2.0.43
-python-dotenv
-requests
+sqlalchemy==2.0.43
+python-dotenv==1.0.1
+requests==2.32.3
 razorpay==1.4.2
 aiosmtplib==4.0.2
-pydantic-settings ==2.10.1
+pydantic-settings==2.10.1
 setuptools>=65.0.0
+# For Admin Panel
+Jinja2==3.1.4
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+email-validator==2.2.0

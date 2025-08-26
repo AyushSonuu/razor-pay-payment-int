@@ -16,6 +16,7 @@ import asyncio
 from . import crud, models, schemas
 from .database import SessionLocal, engine, get_db
 from .db_setup import create_db_and_tables
+from .admin.router import router as admin_router
 
 load_dotenv()
 
@@ -23,6 +24,9 @@ load_dotenv()
 create_db_and_tables()
 
 app = FastAPI()
+
+# Mount the admin router
+app.include_router(admin_router)
 
 # Mount static files
 app.mount("/public", StaticFiles(directory="fastapi_app/public"), name="public")
@@ -48,8 +52,7 @@ async def generate_telegram_invite(chat_id: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/createChatInviteLink"
     payload = {
         "chat_id": chat_id,
-        "member_limit": 1,
-        "expire_date": int(datetime.datetime.now().timestamp()) + 86400  # 24 hours
+        "member_limit": 1
     }
     response = requests.post(url, json=payload)
     data = response.json()

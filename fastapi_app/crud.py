@@ -1,5 +1,7 @@
 from sqlalchemy.orm import Session
 from . import models, schemas
+from .admin import schemas as admin_schemas
+from .admin.security import get_password_hash
 
 # Batch CRUD
 def get_batch_by_name(db: Session, name: str):
@@ -48,4 +50,16 @@ def mark_email_as_sent(db: Session, payment_id: str):
         db_payment.email_sent = True
         db.commit()
         db.refresh(db_payment)
-    return db_payment 
+    return db_payment
+
+# Admin CRUD
+def get_admin_by_email(db: Session, email: str):
+    return db.query(models.Admin).filter(models.Admin.email == email).first()
+
+def create_admin(db: Session, admin: admin_schemas.AdminCreate):
+    hashed_password = get_password_hash(admin.password)
+    db_admin = models.Admin(email=admin.email, hashed_password=hashed_password)
+    db.add(db_admin)
+    db.commit()
+    db.refresh(db_admin)
+    return db_admin 
