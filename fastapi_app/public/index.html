@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Join a Batch</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f8f9fa;
+      min-height: 100vh;
+    }
+    .main-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      text-align: center;
+    }
+    .container {
+      max-width: 900px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin: 0 auto 2rem auto;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      overflow: hidden;
+      text-align: center;
+      transition: transform 0.2s ease;
+      cursor: pointer;
+      border: 2px solid transparent;
+    }
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: #ddd;
+    }
+    .card.selected {
+      border: 3px solid #007bff;
+      transform: translateY(-5px);
+      background: #f8f9ff;
+    }
+    .card-image {
+      width: 100%;
+      height: 200px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 1.5rem;
+      font-weight: bold;
+      text-align: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .card h2 {
+      margin: 15px 0 10px;
+      font-size: 1.5rem;
+    }
+    .card .price {
+      font-size: 1.2rem;
+      color: #007bff;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+    .btn {
+      display: inline-block;
+      margin: 15px 0 20px;
+      padding: 12px 20px;
+      background: #007bff;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: bold;
+      transition: background 0.2s ease;
+      cursor: pointer;
+      border: none;
+      font-size: 16px;
+    }
+    .btn:hover {
+      background: #0056b3;
+    }
+    .btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .payment-form {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      padding: 30px;
+      margin: 2rem auto;
+      text-align: center;
+      display: none;
+      max-width: 500px;
+    }
+    .payment-form.show {
+      display: block;
+    }
+    .form-group {
+      margin: 20px 0;
+      text-align: left;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+      color: #333;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #007bff;
+      box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+    }
+    .batch-info {
+      background: #e3f2fd;
+      border: 1px solid #2196f3;
+      border-radius: 6px;
+      padding: 15px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .batch-info h3 {
+      margin: 0 0 10px 0;
+      color: #1976d2;
+    }
+    @media(max-width: 768px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+      .payment-form {
+        margin: 2rem 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <div class="container">
+      
+      <!-- Morning Batch -->
+      <div class="card" data-batch="morning" id="morning-card">
+        <div class="card-image">
+          🌅 Morning Batch
+        </div>
+        <h2>Morning Batch</h2>
+        <div class="price">₹16999</div>
+        <div class="btn">Select Morning Batch</div>
+      </div>
+      
+      <!-- Evening Batch -->
+      <div class="card" data-batch="evening" id="evening-card">
+        <div class="card-image">
+          🌙 Evening Batch
+        </div>
+        <h2>Evening Batch</h2>
+        <div class="price">₹16999</div>
+        <div class="btn">Select Evening Batch</div>
+      </div>
+      
+    </div>
+
+    <!-- Payment Form -->
+    <div class="payment-form" id="payment-form">
+      <div class="batch-info" id="batch-info">
+        <h3 id="batch-title">Selected Batch</h3>
+        <p id="batch-description">Please fill in your details to proceed with payment</p>
+      </div>
+      
+      <form id="payment-details">
+        <div class="form-group">
+          <label for="name">Full Name</label>
+          <input type="text" id="name" name="name" required placeholder="Enter your full name">
+        </div>
+        
+        <div class="form-group">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" name="email" required placeholder="Enter your email address">
+        </div>
+        
+        <div class="phone">
+          <label for="phone">Phone Number</label>
+          <input type="tel" id="phone" name="phone" required placeholder="Enter your phone number">
+        </div>
+        
+        <button type="submit" class="btn" id="pay-btn">Pay Now</button>
+      </form>
+    </div>
+
+  </div>
+
+  <script>
+    let selectedBatch = null;
+
+    function selectBatch(batchType) {
+      // Remove selection from all cards
+      document.querySelectorAll('.card').forEach(card => {
+        card.classList.remove('selected');
+      });
+      
+      // Select the clicked card
+      const selectedCard = document.getElementById(`${batchType}-card`);
+      if (selectedCard) {
+        selectedCard.classList.add('selected');
+      }
+      
+      // Set selected batch
+      selectedBatch = batchType;
+      
+      // Update batch info
+      const batchTitle = document.getElementById('batch-title');
+      const batchDescription = document.getElementById('batch-description');
+      
+      if (batchTitle && batchDescription) {
+        batchTitle.textContent = `${batchType.charAt(0).toUpperCase() + batchType.slice(1)} Batch Selected`;
+        batchDescription.textContent = `You've selected the ${batchType} batch. Please fill in your details below.`;
+      }
+      
+      // Show payment form
+      const paymentForm = document.getElementById('payment-form');
+      if (paymentForm) {
+        paymentForm.classList.add('show');
+        
+        // Scroll to payment form
+        paymentForm.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+
+    function handlePaymentSuccess(response, batchType) {
+      // Redirect to success page with batch info
+      window.location.href = `/success.html?batch=${batchType}&payment_id=${response.razorpay_payment_id}`;
+    }
+
+    async function createRazorpayOrder(batchType, name, email, phone) {
+      try {
+        // First, create order on your backend
+        const response = await fetch('/create-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            batchType: batchType,
+            name: name,
+            email: email,
+            phone: phone,
+            amount: 1699900
+          })
+        });
+
+        const orderData = await response.json();
+        
+        if (orderData.success) {
+          // Open Razorpay checkout
+          const options = {
+            key: orderData.key_id,
+            amount: orderData.amount,
+            currency: orderData.currency,
+            name: `${batchType.charAt(0).toUpperCase() + batchType.slice(1)} Batch`,
+            description: `Join ${batchType} batch`,
+            order_id: orderData.order_id,
+            prefill: {
+              name: name,
+              email: email,
+              contact: phone
+            },
+            handler: function(response) {
+              // Payment successful
+              handlePaymentSuccess(response, batchType);
+            },
+            theme: {
+              color: batchType === 'morning' ? '#007bff' : '#28a745'
+            }
+          };
+
+          const rzp = new Razorpay(options);
+          rzp.open();
+        } else {
+          alert('Error creating order: ' + orderData.error);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        alert('Error creating order. Please try again.');
+      }
+    }
+
+    // Initialize event listeners when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      // Add click event listeners to batch cards
+      const cards = document.querySelectorAll('.card');
+      
+      cards.forEach((card) => {
+        card.addEventListener('click', function(e) {
+          const batchType = this.getAttribute('data-batch');
+          if (batchType) {
+            selectBatch(batchType);
+          }
+        });
+        
+        // Also add click to the button inside the card
+        const btn = card.querySelector('.btn');
+        if (btn) {
+          btn.addEventListener('click', function(e) {
+            e.stopPropagation(); // Prevent double triggering
+            const batchType = card.getAttribute('data-batch');
+            if (batchType) {
+              selectBatch(batchType);
+            }
+          });
+        }
+      });
+
+      // Handle form submission
+      const form = document.getElementById('payment-details');
+      if (form) {
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          
+          if (!selectedBatch) {
+            alert('Please select a batch first!');
+            return;
+          }
+          
+          const formData = new FormData(this);
+          const name = formData.get('name');
+          const email = formData.get('email');
+          const phone = formData.get('phone');
+          
+          // Create Razorpay order with batch information
+          createRazorpayOrder(selectedBatch, name, email, phone);
+        });
+      }
+    });
+  </script>
+</body>
+</html>
+
+

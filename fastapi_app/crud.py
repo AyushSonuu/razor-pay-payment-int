@@ -1,0 +1,43 @@
+from sqlalchemy.orm import Session
+from . import models, schemas
+
+# Batch CRUD
+def get_batch_by_name(db: Session, name: str):
+    return db.query(models.Batch).filter(models.Batch.name == name).first()
+
+def create_batch(db: Session, batch: schemas.BatchCreate):
+    db_batch = models.Batch(name=batch.name, telegram_chat_id=batch.telegram_chat_id)
+    db.add(db_batch)
+    db.commit()
+    db.refresh(db_batch)
+    return db_batch
+
+# User CRUD
+def get_user_by_email(db: Session, email: str):
+    return db.query(models.User).filter(models.User.email == email).first()
+
+def create_user(db: Session, user: schemas.UserCreate, batch_id: int):
+    db_user = models.User(**user.model_dump(), batch_id=batch_id)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# Payment CRUD
+def create_payment(db: Session, payment: schemas.PaymentCreate, user_id: int):
+    db_payment = models.Payment(**payment.model_dump(), user_id=user_id)
+    db.add(db_payment)
+    db.commit()
+    db.refresh(db_payment)
+    return db_payment
+
+def get_payment_by_payment_id(db: Session, payment_id: str):
+    return db.query(models.Payment).filter(models.Payment.razorpay_payment_id == payment_id).first()
+
+def update_payment_invite_link(db: Session, payment_id: str, invite_link: str):
+    db_payment = get_payment_by_payment_id(db, payment_id)
+    if db_payment:
+        db_payment.invite_link = invite_link
+        db.commit()
+        db.refresh(db_payment)
+    return db_payment 
