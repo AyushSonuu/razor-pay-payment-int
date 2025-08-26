@@ -20,6 +20,7 @@ from . import crud, models, schemas
 from .database import SessionLocal, engine, get_db
 from .db_setup import create_db_and_tables
 from .admin.router import router as admin_router
+from .email_template import get_email_template
 
 load_dotenv()
 
@@ -78,7 +79,7 @@ async def generate_telegram_invite(chat_id: str, settings: dict):
         raise Exception(f"Telegram error: {data.get('description')}")
     return data["result"]["invite_link"]
 
-async def send_email(to: str, invite_link: str, batch: str, settings: dict):
+async def send_email(to: str, invite_link: str, batch: str, settings: dict, user_name: str = None, payment_id: str = None):
     smtp_user = settings.get("SMTP_USER")
     smtp_pass = settings.get("SMTP_PASS")
     smtp_host = settings.get("SMTP_HOST")
@@ -88,17 +89,19 @@ async def send_email(to: str, invite_link: str, batch: str, settings: dict):
         raise Exception("SMTP settings are not fully configured")
         
     message = MIMEMultipart("alternative")
-    message["Subject"] = f"Your Telegram Invite Link ({batch} batch)"
-    message["From"] = f'"{batch.capitalize()} Batch Access" <{smtp_user}>'
+    message["Subject"] = f"🎉 Welcome to TopG Traders - Your {batch.capitalize()} Trading Course Access"
+    message["From"] = f'"TopG Traders" <{smtp_user}>'
     message["To"] = to
 
-    html = f"""
-        <p>Hi,</p>
-        <p>Thanks for joining the <b>{batch}</b> batch! Here's your one-time invite link:</p>
-        <p><a href="{invite_link}" target="_blank" rel="noreferrer">{invite_link}</a></p>
-        <p><small>This link is valid bvjdsgfvbejhr dfjs gfjh gfkesjrd gfjerf for 24 hours and can be used once.</small></p>
-    """
-    message.attach(MIMEText(html, "html"))
+    # Use the beautiful email template
+    html_content = get_email_template(
+        user_name=user_name or "Trader",
+        batch_name=batch,
+        invite_link=invite_link,
+        payment_id=payment_id
+    )
+    
+    message.attach(MIMEText(html_content, "html"))
 
     await aiosmtplib.send(
         message,
@@ -236,7 +239,14 @@ async def process_payment_and_send_email(request_id: str, user_id: int, payment_
             return
         
         print(f"BG_TASK {request_id}/{payment_id}: Attempting to send email to {payment_bg.user.email}.")
-        await send_email(to=payment_bg.user.email, invite_link=invite_link, batch=payment_bg.user.batch.name, settings=settings)
+        await send_email(
+            to=payment_bg.user.email, 
+            invite_link=invite_link, 
+            batch=payment_bg.user.batch.name, 
+            settings=settings,
+            user_name=payment_bg.user.name,
+            payment_id=payment_id
+        )
         email_sent_flag = True
         print(f"BG_TASK {request_id}/{payment_id}: Email send successful.")
         
