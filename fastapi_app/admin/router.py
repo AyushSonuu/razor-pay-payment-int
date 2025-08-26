@@ -4,7 +4,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from . import crud, schemas
+from .. import crud
+from . import schemas
 from .security import verify_password
 # Add JWT/session management imports here later
 
