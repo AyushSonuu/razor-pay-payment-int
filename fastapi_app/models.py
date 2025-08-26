@@ -40,9 +40,8 @@ class Payment(Base):
     razorpay_order_id = Column(String, index=True)
     amount = Column(Float)
     currency = Column(String)
-    status = Column(String)
+    status = Column(String, default="pending", nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     invite_link = Column(String, nullable=True)
-    email_sent = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User", back_populates="payments") 

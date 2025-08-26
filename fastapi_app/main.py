@@ -133,6 +133,37 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str):
+    db_bg = SessionLocal()
+    try:
+        user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
+        payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
+        
+        if not user_bg or not payment_bg:
+            crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
+            return
+
+        # Only generate link if it doesn't exist
+        if not payment_bg.invite_link:
+            chat_id = user_bg.batch.telegram_chat_id
+            invite_link = await generate_telegram_invite(chat_id)
+            crud.update_payment_invite_link(db_bg, payment_id=payment_bg.razorpay_payment_id, invite_link=invite_link)
+        else:
+            invite_link = payment_bg.invite_link
+        
+        # Attempt to send email
+        await send_email(to=email_to, invite_link=invite_link, batch=batch_type)
+        
+        # If successful, mark as completed
+        crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
+
+    except Exception as e:
+        # On failure, mark as failed to allow for potential retries
+        crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
+        print(f"Error processing payment {payment_id}: {e}")
+    finally:
+        db_bg.close()
+
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     raw_body = await request.body()
@@ -146,66 +177,42 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
 
     if event == "payment.captured":
         payment_entity = body["payload"]["payment"]["entity"]
-        order_id = payment_entity["order_id"]
         payment_id = payment_entity["id"]
         
-        # Idempotency Check: See if this payment has already been successfully processed.
+        # --- Robust Idempotency Check ---
+        db.expire_all() # Ensure we have the latest from the DB
         existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
-        if existing_payment and existing_payment.email_sent:
-            return JSONResponse({"status": "ok", "message": "Email already sent for this payment."})
 
+        # If already completed or currently processing, do nothing.
+        if existing_payment and existing_payment.status in ["processing", "completed"]:
+            return JSONResponse({"status": "ok", "message": f"Payment {payment_id} is already {existing_payment.status}."})
+
+        # --- Mark as Processing and Start Task ---
+        order_id = payment_entity["order_id"]
         email = payment_entity["email"]
         amount = payment_entity["amount"] / 100
         currency = payment_entity["currency"]
-        
         order = razorpay_client.order.fetch(order_id)
         batch_type = order["notes"]["batch_type"]
 
         user = crud.get_user_by_email(db, email=email)
         if user:
-            # If payment doesn't exist, create it. Otherwise, use the existing one.
+            # If payment doesn't exist, create it.
             if not existing_payment:
                 payment_data = schemas.PaymentCreate(
                     razorpay_payment_id=payment_id,
                     razorpay_order_id=order_id,
                     amount=amount,
                     currency=currency,
-                    status="captured",
-                    invite_link=None # Explicitly set to None on creation
+                    status="processing", # Set to processing
+                    invite_link=None
                 )
-                payment = crud.create_payment(db, payment_data, user_id=user.id)
+                crud.create_payment(db, payment_data, user_id=user.id)
+            else: # If it exists but failed/was pending, mark it as processing now
+                crud.update_payment_status(db, payment_id=payment_id, status="processing")
             
-            user_id = user.id
-            # Generate invite link and send email in the background
-            async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str):
-                db_bg = SessionLocal()
-                try:
-                    user_bg = db_bg.query(models.User).filter(models.User.id == user_id).first()
-                    payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
-                    
-                    if not user_bg or not payment_bg:
-                        return
-
-                    # Only generate link if it doesn't exist
-                    if not payment_bg.invite_link:
-                        chat_id = user_bg.batch.telegram_chat_id
-                        invite_link = await generate_telegram_invite(chat_id)
-                        crud.update_payment_invite_link(db_bg, payment_id=payment_bg.razorpay_payment_id, invite_link=invite_link)
-                    else:
-                        invite_link = payment_bg.invite_link
-                    
-                    # Attempt to send email
-                    await send_email(to=email_to, invite_link=invite_link, batch=batch_type)
-                    
-                    # If email is sent successfully, mark it in the DB
-                    crud.mark_email_as_sent(db_bg, payment_id=payment_bg.razorpay_payment_id)
-                except Exception as e:
-                    # You might want to log the error here
-                    print(f"Error processing payment {payment_id}: {e}")
-                finally:
-                    db_bg.close()
-            
-            background_tasks.add_task(process_payment_and_send_email, user_id, payment_id, batch_type, email)
+            # Launch background task
+            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email)
 
     return JSONResponse({"status": "ok"})
 
