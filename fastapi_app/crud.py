@@ -110,6 +110,14 @@ def get_payments_by_date_range(db: Session, start_date: datetime, end_date: date
         )
     ).all()
 
+def update_payment_invite_link(db: Session, payment_id: str, invite_link: str):
+    db_payment = get_payment_by_payment_id(db, payment_id)
+    if db_payment and db_payment.user:
+        db_payment.user.invite_link = invite_link
+        db.commit()
+        db.refresh(db_payment.user)
+    return db_payment.user if db_payment else None
+
 # Admin CRUD
 def get_admin_by_email(db: Session, email: str):
     return db.query(models.Admin).filter(models.Admin.email == email).first()
@@ -202,19 +210,19 @@ def get_payment_analytics(db: Session, days: int = 30):
 
 def get_user_analytics(db: Session, days: int = 30):
     """Get user analytics for the last N days"""
-    end_date = datetime.now()
+    end_date = datetime.now(datetime.timezone.utc)
     start_date = end_date - timedelta(days=days)
     
     # Users joined per day
     daily_users = db.query(
-        func.date(models.User.id).label('date'),
+        func.date(models.User.created_at).label('date'),
         func.count(models.User.id).label('count')
     ).filter(
         and_(
-            models.User.id >= start_date,
-            models.User.id <= end_date
+            models.User.created_at >= start_date,
+            models.User.created_at <= end_date
         )
-    ).group_by(func.date(models.User.id)).all()
+    ).group_by(func.date(models.User.created_at)).order_by(func.date(models.User.created_at)).all()
     
     # Users per batch
     batch_distribution = db.query(
@@ -225,4 +233,26 @@ def get_user_analytics(db: Session, days: int = 30):
     return {
         "daily_users": daily_users,
         "batch_distribution": batch_distribution
-    } 
+    }
+
+# Settings CRUD
+def get_setting(db: Session, key: str):
+    return db.query(models.Setting).filter(models.Setting.key == key).first()
+
+def get_all_settings(db: Session):
+    return db.query(models.Setting).all()
+
+def update_setting(db: Session, key: str, value: str):
+    db_setting = get_setting(db, key)
+    if db_setting:
+        db_setting.value = value
+    else:
+        db_setting = models.Setting(key=key, value=value)
+        db.add(db_setting)
+    db.commit()
+    db.refresh(db_setting)
+    return db_setting
+
+def get_settings_as_dict(db: Session):
+    settings = get_all_settings(db)
+    return {setting.key: setting.value for setting in settings} 

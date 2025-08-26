@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, timedelta
+import os
 
 from ..database import get_db
 from .. import crud, models
@@ -89,6 +90,11 @@ async def get_user_analytics(
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- Analytics Routes ---
+@router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    return templates.TemplateResponse("analytics.html", {"request": request})
 
 # --- User Management Routes ---
 @router.get("/users", response_class=HTMLResponse)
@@ -372,8 +378,9 @@ async def update_payment(
             crud.update_payment_status(db, payment.razorpay_payment_id, update_data["status"])
         
         if "invite_link" in update_data:
-            crud.update_payment_invite_link(db, payment.razorpay_payment_id, update_data["invite_link"])
-        
+            if payment.user:
+                crud.update_user(db, user_id=payment.user.id, user_data={"invite_link": update_data["invite_link"]})
+
         return JSONResponse({
             "success": True,
             "message": "Payment updated successfully"
@@ -507,6 +514,49 @@ async def delete_batch(batch_id: int, db: Session = Depends(get_db)):
         })
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Settings Management Routes ---
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return templates.TemplateResponse("settings.html", {"request": request})
+
+@router.get("/api/settings")
+async def get_settings(db: Session = Depends(get_db)):
+    """Get all settings"""
+    try:
+        # Start with .env values as defaults
+        settings_dict = {
+            "RAZORPAY_KEY_ID": os.getenv("RAZORPAY_KEY_ID", ""),
+            "RAZORPAY_KEY_SECRET": os.getenv("RAZORPAY_KEY_SECRET", ""),
+            "RAZORPAY_WEBHOOK_SECRET": os.getenv("RAZORPAY_WEBHOOK_SECRET", ""),
+            "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            "TELEGRAM_CHAT_ID_MORNING": os.getenv("TELEGRAM_CHAT_ID_MORNING", ""),
+            "TELEGRAM_CHAT_ID_EVENING": os.getenv("TELEGRAM_CHAT_ID_EVENING", ""),
+            "SMTP_HOST": os.getenv("SMTP_HOST", ""),
+            "SMTP_PORT": os.getenv("SMTP_PORT", ""),
+            "SMTP_USER": os.getenv("SMTP_USER", ""),
+            "SMTP_PASS": os.getenv("SMTP_PASS", "")
+        }
+        
+        # Override with values from the database
+        db_settings = crud.get_settings_as_dict(db)
+        settings_dict.update(db_settings)
+
+        return JSONResponse({"success": True, "data": settings_dict})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/settings")
+async def update_settings(request: Request, db: Session = Depends(get_db)):
+    """Update settings"""
+    try:
+        form_data = await request.json()
+        for key, value in form_data.items():
+            if value is not None:
+                crud.update_setting(db, key=key, value=value)
+        return JSONResponse({"success": True, "message": "Settings updated successfully"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

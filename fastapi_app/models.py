@@ -20,6 +20,7 @@ class User(Base):
     phone = Column(String, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"))
     invite_link = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     batch = relationship("Batch", back_populates="users")
     payments = relationship("Payment", back_populates="user")
@@ -50,4 +51,10 @@ class ProcessingLock(Base):
     __tablename__ = "processing_locks"
 
     payment_id = Column(String, primary_key=True)
-    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)) 
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key = Column(String, primary_key=True, index=True)
+    value = Column(String, nullable=True) 

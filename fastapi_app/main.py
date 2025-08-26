@@ -33,39 +33,62 @@ app.include_router(admin_router)
 # Mount static files
 app.mount("/public", StaticFiles(directory="fastapi_app/public"), name="public")
 
-# --- Environment Variables ---
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
-RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID_MORNING = os.getenv("TELEGRAM_CHAT_ID_MORNING")
-TELEGRAM_CHAT_ID_EVENING = os.getenv("TELEGRAM_CHAT_ID_EVENING")
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASS")
-
-# Initialize Razorpay client
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-
 # --- Helper Functions ---
+def get_app_settings(db: Session = Depends(get_db)):
+    """Dependency to get settings from DB with fallback to .env"""
+    settings = {}
+    
+    # Load from .env first as a fallback
+    keys = [
+        "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET",
+        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID_MORNING", "TELEGRAM_CHAT_ID_EVENING",
+        "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"
+    ]
+    for key in keys:
+        settings[key] = os.getenv(key)
+        
+    # Override with settings from DB
+    db_settings = crud.get_settings_as_dict(db)
+    settings.update(db_settings)
+    
+    return settings
 
-async def generate_telegram_invite(chat_id: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/createChatInviteLink"
-    payload = {
-        "chat_id": chat_id,
-        "member_limit": 1
-    }
+def get_razorpay_client(settings: dict = Depends(get_app_settings)):
+    """Dependency to get an initialized Razorpay client"""
+    key_id = settings.get("RAZORPAY_KEY_ID")
+    key_secret = settings.get("RAZORPAY_KEY_SECRET")
+    
+    if not key_id or not key_secret:
+        raise HTTPException(status_code=500, detail="Razorpay credentials not configured")
+        
+    return razorpay.Client(auth=(key_id, key_secret))
+
+async def generate_telegram_invite(chat_id: str, settings: dict):
+    bot_token = settings.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        raise Exception("Telegram bot token not configured")
+        
+    url = f"https://api.telegram.org/bot{bot_token}/createChatInviteLink"
+    payload = {"chat_id": chat_id, "member_limit": 1}
     response = requests.post(url, json=payload)
     data = response.json()
+    
     if not data.get("ok"):
         raise Exception(f"Telegram error: {data.get('description')}")
     return data["result"]["invite_link"]
 
-async def send_email(to: str, invite_link: str, batch: str):
+async def send_email(to: str, invite_link: str, batch: str, settings: dict):
+    smtp_user = settings.get("SMTP_USER")
+    smtp_pass = settings.get("SMTP_PASS")
+    smtp_host = settings.get("SMTP_HOST")
+    smtp_port = int(settings.get("SMTP_PORT", 465))
+
+    if not all([smtp_user, smtp_pass, smtp_host]):
+        raise Exception("SMTP settings are not fully configured")
+        
     message = MIMEMultipart("alternative")
     message["Subject"] = f"Your Telegram Invite Link ({batch} batch)"
-    message["From"] = f'"{batch.capitalize()} Batch Access" <{SMTP_USER}>'
+    message["From"] = f'"{batch.capitalize()} Batch Access" <{smtp_user}>'
     message["To"] = to
 
     html = f"""
@@ -78,14 +101,16 @@ async def send_email(to: str, invite_link: str, batch: str):
 
     await aiosmtplib.send(
         message,
-        hostname=SMTP_HOST,
-        port=SMTP_PORT,
-        username=SMTP_USER,
-        password=SMTP_PASS,
+        hostname=smtp_host,
+        port=smtp_port,
+        username=smtp_user,
+        password=smtp_pass,
         use_tls=True
     )
 
 def verify_signature(body: bytes, signature: str, secret: str):
+    if not secret:
+        return False
     generated_signature = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(generated_signature, signature)
 
@@ -100,7 +125,12 @@ async def read_success():
     return FileResponse("fastapi_app/public/success.html")
 
 @app.post("/create-order")
-async def create_order(order_request: schemas.OrderRequest, db: Session = Depends(get_db)):
+async def create_order(
+    order_request: schemas.OrderRequest, 
+    db: Session = Depends(get_db),
+    settings: dict = Depends(get_app_settings),
+    razorpay_client: razorpay.Client = Depends(get_razorpay_client)
+):
     try:
         order_data = {
             "amount": order_request.amount,
@@ -118,13 +148,16 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
         # Pre-create user and batch, and generate invite link
         batch = crud.get_batch_by_name(db, name=order_request.batchType)
         if not batch:
-            chat_id = TELEGRAM_CHAT_ID_MORNING if order_request.batchType == "morning" else TELEGRAM_CHAT_ID_EVENING
+            chat_id_key = f"TELEGRAM_CHAT_ID_{order_request.batchType.upper()}"
+            chat_id = settings.get(chat_id_key)
+            if not chat_id:
+                raise HTTPException(status_code=500, detail=f"Telegram chat ID for batch '{order_request.batchType}' not configured")
             batch = crud.create_batch(db, schemas.BatchCreate(name=order_request.batchType, telegram_chat_id=chat_id))
 
         user = crud.get_user_by_email(db, email=order_request.email)
         if not user:
             # Generate invite link for new user
-            invite_link = await generate_telegram_invite(batch.telegram_chat_id)
+            invite_link = await generate_telegram_invite(batch.telegram_chat_id, settings)
             user_data = schemas.UserCreate(
                 name=order_request.name,
                 email=order_request.email,
@@ -134,20 +167,20 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
             user = crud.create_user(db, user_data, batch_id=batch.id)
         elif not user.invite_link or user.batch_id != batch.id:
             # If user exists but has no link, or is changing batches, generate a new one.
-            invite_link = await generate_telegram_invite(batch.telegram_chat_id)
+            invite_link = await generate_telegram_invite(batch.telegram_chat_id, settings)
             user = crud.update_user(db, user_id=user.id, user_data={"invite_link": invite_link, "batch_id": batch.id})
 
         return JSONResponse({
             "success": True,
             "order_id": order["id"],
-            "key_id": RAZORPAY_KEY_ID,
+            "key_id": settings.get("RAZORPAY_KEY_ID"),
             "amount": order["amount"],
             "currency": order["currency"]
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str):
+async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str, settings: dict):
     db_bg = SessionLocal()
     
     # Attempt to acquire a lock for this payment_id
@@ -192,7 +225,7 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         invite_link = user_bg.invite_link
         
         # Attempt to send email
-        await send_email(to=email_to, invite_link=invite_link, batch=batch_type)
+        await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
         
         # If successful, mark as completed
         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
@@ -215,11 +248,18 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         db_bg.close()
 
 @app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db),
+    settings: dict = Depends(get_app_settings),
+    razorpay_client: razorpay.Client = Depends(get_razorpay_client)
+):
     raw_body = await request.body()
     signature = request.headers.get("x-razorpay-signature")
+    webhook_secret = settings.get("RAZORPAY_WEBHOOK_SECRET")
 
-    if not verify_signature(raw_body, signature, RAZORPAY_WEBHOOK_SECRET):
+    if not verify_signature(raw_body, signature, webhook_secret):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     body = await request.json()
@@ -261,7 +301,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
                 crud.update_payment_status(db, payment_id=payment_id, status="processing")
             
             # Launch background task
-            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email)
+            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
 
     return JSONResponse({"status": "ok"})
 
@@ -324,23 +364,23 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/status")
-def get_status():
+def get_status(settings: dict = Depends(get_app_settings)):
     return {
         "server": "running",
         "timestamp": datetime.datetime.now().isoformat(),
         "environment": {
             "razorpay": {
-                "keyId": bool(RAZORPAY_KEY_ID),
+                "keyId": bool(settings.get("RAZORPAY_KEY_ID")),
             },
             "telegram": {
-                "botToken": bool(TELEGRAM_BOT_TOKEN),
-                "morningChatId": bool(TELEGRAM_CHAT_ID_MORNING),
-                "eveningChatId": bool(TELEGRAM_CHAT_ID_EVENING)
+                "botToken": bool(settings.get("TELEGRAM_BOT_TOKEN")),
+                "morningChatId": bool(settings.get("TELEGRAM_CHAT_ID_MORNING")),
+                "eveningChatId": bool(settings.get("TELEGRAM_CHAT_ID_EVENING"))
             },
             "smtp": {
-                "host": bool(SMTP_HOST),
-                "port": bool(SMTP_PORT),
-                "user": bool(SMTP_USER)
+                "host": bool(settings.get("SMTP_HOST")),
+                "port": bool(settings.get("SMTP_PORT")),
+                "user": bool(settings.get("SMTP_USER"))
             }
         }
     }

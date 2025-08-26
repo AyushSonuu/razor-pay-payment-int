@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Admin Panel</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .dashboard-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            padding: 20px 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 20px;
+        }
+
+        .sidebar-header h2 {
+            color: #667eea;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .nav-menu {
+            list-style: none;
+        }
+
+        .nav-item {
+            margin-bottom: 5px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 12px 20px;
+            color: #666;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            border-radius: 0 25px 25px 0;
+            margin-right: 10px;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: translateX(5px);
+        }
+
+        .nav-link i {
+            margin-right: 10px;
+            width: 20px;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 250px;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .settings-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .settings-header {
+            margin-bottom: 20px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 15px;
+        }
+
+        .settings-header h2 {
+            font-size: 1.5rem;
+            color: #333;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .form-group input {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.25);
+        }
+
+        .form-footer {
+            margin-top: 30px;
+            text-align: right;
+        }
+
+        .alert {
+            padding: 15px;
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert i {
+            margin-right: 10px;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2><i class="fas fa-cog"></i> Admin Panel</h2>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a href="/admin/dashboard" class="nav-link">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/users" class="nav-link">
+                        <i class="fas fa-users"></i> Users
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/payments" class="nav-link">
+                        <i class="fas fa-credit-card"></i> Payments
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/batches" class="nav-link">
+                        <i class="fas fa-layer-group"></i> Batches
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/analytics" class="nav-link">
+                        <i class="fas fa-chart-line"></i> Analytics
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/settings" class="nav-link active">
+                        <i class="fas fa-cog"></i> Settings
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/logout" class="nav-link">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="header">
+                <h1>Application Settings</h1>
+            </div>
+
+            <div class="alert">
+                <i class="fas fa-info-circle"></i>
+                These settings are loaded from the database. For changes to take full effect, you may need to restart the application. Critical settings like the database URL cannot be changed from this panel.
+            </div>
+
+            <form id="settingsForm" onsubmit="saveSettings(event)">
+                <div class="settings-card">
+                    <div class="settings-header">
+                        <h2>Razorpay Configuration</h2>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="RAZORPAY_KEY_ID">Key ID</label>
+                            <input type="text" id="RAZORPAY_KEY_ID" name="RAZORPAY_KEY_ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="RAZORPAY_KEY_SECRET">Key Secret</label>
+                            <input type="password" id="RAZORPAY_KEY_SECRET" name="RAZORPAY_KEY_SECRET">
+                        </div>
+                        <div class="form-group">
+                            <label for="RAZORPAY_WEBHOOK_SECRET">Webhook Secret</label>
+                            <input type="password" id="RAZORPAY_WEBHOOK_SECRET" name="RAZORPAY_WEBHOOK_SECRET">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <div class="settings-header">
+                        <h2>Telegram Configuration</h2>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="TELEGRAM_BOT_TOKEN">Bot Token</label>
+                            <input type="password" id="TELEGRAM_BOT_TOKEN" name="TELEGRAM_BOT_TOKEN">
+                        </div>
+                        <div class="form-group">
+                            <label for="TELEGRAM_CHAT_ID_MORNING">Morning Chat ID</label>
+                            <input type="text" id="TELEGRAM_CHAT_ID_MORNING" name="TELEGRAM_CHAT_ID_MORNING">
+                        </div>
+                        <div class="form-group">
+                            <label for="TELEGRAM_CHAT_ID_EVENING">Evening Chat ID</label>
+                            <input type="text" id="TELEGRAM_CHAT_ID_EVENING" name="TELEGRAM_CHAT_ID_EVENING">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <div class="settings-header">
+                        <h2>SMTP Configuration</h2>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="SMTP_HOST">Host</label>
+                            <input type="text" id="SMTP_HOST" name="SMTP_HOST">
+                        </div>
+                        <div class="form-group">
+                            <label for="SMTP_PORT">Port</label>
+                            <input type="number" id="SMTP_PORT" name="SMTP_PORT">
+                        </div>
+                        <div class="form-group">
+                            <label for="SMTP_USER">User</label>
+                            <input type="email" id="SMTP_USER" name="SMTP_USER">
+                        </div>
+                        <div class="form-group">
+                            <label for="SMTP_PASS">Password</label>
+                            <input type="password" id="SMTP_PASS" name="SMTP_PASS">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-footer">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Save Settings
+                    </button>
+                </div>
+            </form>
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSettings();
+        });
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/admin/api/settings');
+                const result = await response.json();
+
+                if (result.success) {
+                    const settings = result.data;
+                    for (const key in settings) {
+                        const input = document.getElementById(key);
+                        if (input) {
+                            input.value = settings[key];
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading settings:', error);
+                alert('Could not load settings.');
+            }
+        }
+
+        async function saveSettings(event) {
+            event.preventDefault();
+            const form = document.getElementById('settingsForm');
+            const formData = new FormData(form);
+            const settingsData = Object.fromEntries(formData.entries());
+
+            try {
+                const response = await fetch('/admin/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settingsData)
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert('Settings saved successfully!');
+                } else {
+                    alert('Error saving settings: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error saving settings:', error);
+                alert('An error occurred while saving settings.');
+            }
+        }
+    </script>
+</body>
+</html> 
