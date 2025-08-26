@@ -83,7 +83,7 @@ async def send_email(to: str, invite_link: str, batch: str, settings: dict):
     smtp_pass = settings.get("SMTP_PASS")
     smtp_host = settings.get("SMTP_HOST")
     smtp_port = int(settings.get("SMTP_PORT", 465))
-
+    print(f" this is the invite link {invite_link}")
     if not all([smtp_user, smtp_pass, smtp_host]):
         raise Exception("SMTP settings are not fully configured")
         
