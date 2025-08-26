@@ -8,7 +8,6 @@ class PaymentBase(BaseModel):
     amount: float
     currency: str
     status: str
-    invite_link: Optional[str] = None
 
 class PaymentCreate(PaymentBase):
     pass
@@ -25,6 +24,7 @@ class UserBase(BaseModel):
     name: str
     email: str
     phone: str
+    invite_link: Optional[str] = None
 
 class UserCreate(UserBase):
     pass

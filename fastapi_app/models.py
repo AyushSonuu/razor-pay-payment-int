@@ -19,6 +19,7 @@ class User(Base):
     email = Column(String, index=True)
     phone = Column(String, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"))
+    invite_link = Column(String, nullable=True)
 
     batch = relationship("Batch", back_populates="users")
     payments = relationship("Payment", back_populates="user")
@@ -42,7 +43,6 @@ class Payment(Base):
     currency = Column(String)
     status = Column(String, default="pending", nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
-    invite_link = Column(String, nullable=True)
 
     user = relationship("User", back_populates="payments")
 

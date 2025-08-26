@@ -85,14 +85,6 @@ def create_payment(db: Session, payment: schemas.PaymentCreate, user_id: int):
 def get_payment_by_payment_id(db: Session, payment_id: str):
     return db.query(models.Payment).filter(models.Payment.razorpay_payment_id == payment_id).first()
 
-def update_payment_invite_link(db: Session, payment_id: str, invite_link: str):
-    db_payment = get_payment_by_payment_id(db, payment_id)
-    if db_payment:
-        db_payment.invite_link = invite_link
-        db.commit()
-        db.refresh(db_payment)
-    return db_payment
-
 def update_payment_status(db: Session, payment_id: str, status: str):
     db_payment = get_payment_by_payment_id(db, payment_id)
     if db_payment:

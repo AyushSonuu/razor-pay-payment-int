@@ -115,7 +115,7 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
         }
         order = razorpay_client.order.create(data=order_data)
 
-        # Pre-create user and batch if they don't exist
+        # Pre-create user and batch, and generate invite link
         batch = crud.get_batch_by_name(db, name=order_request.batchType)
         if not batch:
             chat_id = TELEGRAM_CHAT_ID_MORNING if order_request.batchType == "morning" else TELEGRAM_CHAT_ID_EVENING
@@ -123,7 +123,19 @@ async def create_order(order_request: schemas.OrderRequest, db: Session = Depend
 
         user = crud.get_user_by_email(db, email=order_request.email)
         if not user:
-            user = crud.create_user(db, schemas.UserCreate(name=order_request.name, email=order_request.email, phone=order_request.phone), batch_id=batch.id)
+            # Generate invite link for new user
+            invite_link = await generate_telegram_invite(batch.telegram_chat_id)
+            user_data = schemas.UserCreate(
+                name=order_request.name,
+                email=order_request.email,
+                phone=order_request.phone,
+                invite_link=invite_link
+            )
+            user = crud.create_user(db, user_data, batch_id=batch.id)
+        elif not user.invite_link or user.batch_id != batch.id:
+            # If user exists but has no link, or is changing batches, generate a new one.
+            invite_link = await generate_telegram_invite(batch.telegram_chat_id)
+            user = crud.update_user(db, user_id=user.id, user_data={"invite_link": invite_link, "batch_id": batch.id})
 
         return JSONResponse({
             "success": True,
@@ -171,20 +183,29 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
             print(f"Payment {payment_id} is already completed. Aborting.")
             return
 
-        # Generate link if it doesn't exist
-        if not payment_bg.invite_link:
-            chat_id = user_bg.batch.telegram_chat_id
-            invite_link = await generate_telegram_invite(chat_id)
-            # The crud function commits, so the link is saved immediately.
-            crud.update_payment_invite_link(db_bg, payment_id=payment_bg.razorpay_payment_id, invite_link=invite_link)
-        else:
-            invite_link = payment_bg.invite_link
+        # The invite link is now pre-generated and stored on the user.
+        if not user_bg.invite_link:
+            print(f"FATAL: Invite link not found for user {user_id} during payment processing.")
+            crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
+            return
+        
+        invite_link = user_bg.invite_link
         
         # Attempt to send email
         await send_email(to=email_to, invite_link=invite_link, batch=batch_type)
         
         # If successful, mark as completed
         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
+
+        try:
+            # Attempt to remove the lock. If it fails, it's not critical.
+            lock_to_delete = db_bg.query(models.ProcessingLock).filter(models.ProcessingLock.payment_id == payment_id).first()
+            if lock_to_delete:
+                db_bg.delete(lock_to_delete)
+                db_bg.commit()
+        except Exception as lock_e:
+            print(f"Error removing lock for payment {payment_id}: {lock_e}")
+            db_bg.rollback()
 
     except Exception as e:
         # On failure, mark as failed to allow for potential retries
@@ -233,8 +254,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
                     razorpay_order_id=order_id,
                     amount=amount,
                     currency=currency,
-                    status="processing", # Set to processing
-                    invite_link=None
+                    status="processing" # Set to processing
                 )
                 crud.create_payment(db, payment_data, user_id=user.id)
             else: # If it exists but failed/was pending, mark it as processing now
@@ -254,15 +274,15 @@ async def get_invite_link(req: Request, db: Session = Depends(get_db)):
     for _ in range(5):
         db.expire_all() # Ensure we get the latest from the DB
         payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
-        if payment and payment.invite_link:
+        if payment and payment.user and payment.user.invite_link:
             return JSONResponse({
                 "success": True,
-                "inviteLink": payment.invite_link,
+                "inviteLink": payment.user.invite_link,
                 "batchType": payment.user.batch.name,
                 "message": "Retrieved stored invite link",
                 "data": {
                     "success": True,
-                    "inviteLink": payment.invite_link
+                    "inviteLink": payment.user.invite_link
                 }
             })
         await asyncio.sleep(2) # Wait 2 seconds before retrying
@@ -280,19 +300,23 @@ async def retrieve_invite_link(payment_id: str, db: Session = Depends(get_db)):
     """
     payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
     
-    if payment and payment.invite_link:
+    if payment and payment.user and payment.user.invite_link:
         return JSONResponse({
             "success": True,
-            "inviteLink": payment.invite_link,
+            "inviteLink": payment.user.invite_link,
             "batchType": payment.user.batch.name,
             "status": payment.status,
             "message": "Invite link retrieved successfully"
         })
     else:
+        status = "not_found"
+        if payment:
+            status = payment.status
+        
         return JSONResponse({
             "success": False,
             "error": "Invite link not available yet. Please check your email.",
-            "status": payment.status if payment else "not_found"
+            "status": status
         }, status_code=404)
 
 @app.get("/health")
