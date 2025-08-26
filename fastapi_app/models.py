@@ -23,6 +23,14 @@ class User(Base):
     batch = relationship("Batch", back_populates="users")
     payments = relationship("Payment", back_populates="user")
 
+class Admin(Base):
+    __tablename__ = "admins"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+
 class Payment(Base):
     __tablename__ = "payments"
 
