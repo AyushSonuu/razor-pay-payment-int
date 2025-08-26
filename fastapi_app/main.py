@@ -5,6 +5,7 @@ import requests
 import aiosmtplib
 import hmac
 import hashlib
+import uuid
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -180,12 +181,13 @@ async def create_order(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def process_payment_and_send_email(user_id: int, payment_id: str, batch_type: str, email_to: str, settings: dict):
+async def process_payment_and_send_email(request_id: str, user_id: int, payment_id: str, batch_type: str, email_to: str, settings: dict):
     """
     This background task handles the core logic of sending the email after a
     successful payment. It is responsible for releasing the processing lock
     acquired by the webhook.
     """
+    print(f"BG_TASK {request_id}/{payment_id}: Starting background task.")
     db_bg = SessionLocal()
     email_sent = False
     try:
@@ -193,24 +195,25 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         payment_bg = crud.get_payment_by_payment_id(db_bg, payment_id)
         
         if not user_bg or not payment_bg:
-            print(f"User or Payment not found for payment_id {payment_id}. Aborting processing.")
+            print(f"BG_TASK {request_id}/{payment_id}: User or Payment not found. Aborting.")
             return
 
         # Safety check: ensure we don't re-process a completed payment.
         if payment_bg.status == "completed":
-            print(f"Payment {payment_id} is already completed. Aborting background task.")
+            print(f"BG_TASK {request_id}/{payment_id}: Payment is already completed. Aborting.")
             return
 
         if not user_bg.invite_link:
-            print(f"FATAL: Invite link not found for user {user_id} during payment processing.")
+            print(f"BG_TASK {request_id}/{payment_id}: FATAL - Invite link not found for user {user_id}.")
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
             return
         
         invite_link = user_bg.invite_link
         
-        # Attempt to send email
+        print(f"BG_TASK {request_id}/{payment_id}: Attempting to send email to {email_to}.")
         await send_email(to=email_to, invite_link=invite_link, batch=batch_type, settings=settings)
         email_sent = True
+        print(f"BG_TASK {request_id}/{payment_id}: Email send successful.")
         
         crud.update_payment_status(db_bg, payment_id=payment_bg.razorpay_payment_id, status="completed")
 
@@ -218,17 +221,18 @@ async def process_payment_and_send_email(user_id: int, payment_id: str, batch_ty
         db_bg.rollback()
         if not email_sent:
             # If email was not sent, it's safe to mark as failed for a potential retry.
+            print(f"BG_TASK {request_id}/{payment_id}: Email was NOT sent. Marking as failed due to error: {e}")
             crud.update_payment_status(db_bg, payment_id=payment_id, status="failed")
         else:
             # Email was sent, but a subsequent DB update failed. Log critically.
             # The status will remain 'processing', preventing re-sends on webhook retries.
-            print(f"CRITICAL: Email sent for payment {payment_id}, but DB update failed: {e}")
-        print(f"Error processing payment {payment_id}: {e}")
+            print(f"BG_TASK {request_id}/{payment_id}: CRITICAL - Email sent, but DB update failed: {e}")
+        print(f"BG_TASK {request_id}/{payment_id}: Error processing payment: {e}")
     finally:
-        # ✅ Always remove the lock when the task is done, whether it succeeded or failed.
-        # This makes the payment process re-entrant if it fails and needs to be retried.
+        print(f"BG_TASK {request_id}/{payment_id}: Releasing processing lock.")
         crud.remove_processing_lock(db_bg, payment_id)
         db_bg.close()
+        print(f"BG_TASK {request_id}/{payment_id}: Background task finished.")
 
 
 @app.post("/webhook")
@@ -239,38 +243,47 @@ async def webhook(
     settings: dict = Depends(get_app_settings),
     razorpay_client: razorpay.Client = Depends(get_razorpay_client)
 ):
+    request_id = uuid.uuid4().hex[:6]
     raw_body = await request.body()
     signature = request.headers.get("x-razorpay-signature")
     webhook_secret = settings.get("RAZORPAY_WEBHOOK_SECRET")
+    
+    payment_id_for_logging = "N/A"
+    try:
+        body = await request.json()
+        payment_id_for_logging = body.get("payload", {}).get("payment", {}).get("entity", {}).get("id", "N/A")
+    except Exception:
+        body = {} # In case of JSON decode error
+        
+    print(f"WEBHOOK {request_id}/{payment_id_for_logging}: Received request.")
 
     if not verify_signature(raw_body, signature, webhook_secret):
+        print(f"WEBHOOK {request_id}/{payment_id_for_logging}: Invalid signature.")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    body = await request.json()
     event = body.get("event")
 
     if event == "payment.captured":
         payment_entity = body["payload"]["payment"]["entity"]
         payment_id = payment_entity["id"]
         
-        # ✅ Acquire lock at DB level to prevent race conditions from concurrent webhooks
+        print(f"WEBHOOK {request_id}/{payment_id}: Event 'payment.captured'. Attempting to acquire lock.")
         lock = models.ProcessingLock(payment_id=payment_id)
         db.add(lock)
         try:
             db.commit()
+            print(f"WEBHOOK {request_id}/{payment_id}: Lock acquired successfully.")
         except IntegrityError:
             db.rollback()
-            # Lock already exists, meaning another thread is processing this payment.
-            # Acknowledge gracefully to prevent webhook retries.
-            print(f"Payment {payment_id} is already being processed (lock exists). Aborting webhook.")
+            print(f"WEBHOOK {request_id}/{payment_id}: Lock already exists. Aborting.")
             return JSONResponse({"status": "ok", "message": "Already processing."})
 
         try:
             # --- Idempotency Check (after acquiring lock) ---
             existing_payment = crud.get_payment_by_payment_id(db, payment_id=payment_id)
             if existing_payment and existing_payment.status == "completed":
+                print(f"WEBHOOK {request_id}/{payment_id}: Payment already completed. Releasing lock and aborting.")
                 crud.remove_processing_lock(db, payment_id)
-                print(f"Payment {payment_id} already completed. Aborting webhook.")
                 return JSONResponse({"status": "ok", "message": "Payment already completed."})
 
             # --- Get data and prepare for background task ---
@@ -283,10 +296,9 @@ async def webhook(
 
             user = crud.get_user_by_email(db, email=email)
             if not user:
-                # This should not happen if /create-order worked.
+                print(f"WEBHOOK {request_id}/{payment_id}: CRITICAL - User not found for email {email}. Releasing lock.")
                 crud.remove_processing_lock(db, payment_id)
-                print(f"CRITICAL: User not found for email {email} during webhook for payment {payment_id}.")
-                return JSONResponse({"status": "ok", "message": "User not found."}) # Acknowledge to prevent retries.
+                return JSONResponse({"status": "ok", "message": "User not found."})
 
             # --- Create/Update payment record to 'processing' ---
             if not existing_payment:
@@ -301,16 +313,13 @@ async def webhook(
             else:
                 crud.update_payment_status(db, payment_id=payment_id, status="processing")
             
-            # --- Launch background task ---
-            # The task is now responsible for removing the lock upon completion/failure.
-            background_tasks.add_task(process_payment_and_send_email, user.id, payment_id, batch_type, email, settings)
+            print(f"WEBHOOK {request_id}/{payment_id}: Adding payment processing to background tasks.")
+            background_tasks.add_task(process_payment_and_send_email, request_id, user.id, payment_id, batch_type, email, settings)
 
         except Exception as e:
-            # If anything fails after acquiring the lock, we must release it to allow retries.
-            print(f"Unhandled error in webhook after lock acquisition: {e}")
+            print(f"WEBHOOK {request_id}/{payment_id}: Unhandled error after lock acquisition: {e}. Releasing lock.")
             db.rollback()
             crud.remove_processing_lock(db, payment_id)
-            # Signal a server error to Razorpay so it can retry the webhook.
             raise HTTPException(status_code=500, detail="Internal Server Error in webhook.")
 
     return JSONResponse({"status": "ok"})

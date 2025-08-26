@@ -76,6 +76,7 @@ def get_users_by_batch(db: Session, batch_id: int):
 
 # Payment CRUD
 def create_payment(db: Session, payment: schemas.PaymentCreate, user_id: int):
+    print(f"CRUD: Attempting to create payment for payment_id={payment.razorpay_payment_id}")
     db_payment = models.Payment(**payment.model_dump(), user_id=user_id)
     db.add(db_payment)
     db.commit()
@@ -86,6 +87,7 @@ def get_payment_by_payment_id(db: Session, payment_id: str):
     return db.query(models.Payment).filter(models.Payment.razorpay_payment_id == payment_id).first()
 
 def update_payment_status(db: Session, payment_id: str, status: str):
+    print(f"CRUD: Attempting to update payment_id={payment_id} to status='{status}'")
     db_payment = get_payment_by_payment_id(db, payment_id)
     if db_payment:
         db_payment.status = status
