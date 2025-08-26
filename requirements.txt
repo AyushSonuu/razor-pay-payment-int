@@ -9,7 +9,8 @@ pydantic-settings==2.10.1
 setuptools>=65.0.0,<81
 # For Admin Panel
 Jinja2==3.1.4
-passlib==1.7.4
+bcrypt==3.2.2
+passlib[bcrypt]>=1.7.4
 python-jose[cryptography]==3.3.0
 email-validator==2.2.0
 python-multipart
